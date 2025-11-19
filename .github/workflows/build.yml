@@ -1,0 +1,450 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'App Name'
+        required: true
+        default: 'NY BOTS'
+      web_url:
+        description: 'Website URL'
+        required: true
+        default: 'https://example.com'
+      logo_url:
+        description: 'Logo URL (PNG/JPG)'
+        required: false
+        default: ''
+      package_name:
+        description: 'Package Name (com.example.app)'
+        required: true
+        default: 'com.nybots.app'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup JDK
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+        
+    - name: Create Android Project Structure
+      run: |
+        mkdir -p app/src/main/java/com/webview/app
+        mkdir -p app/src/main/res/layout
+        mkdir -p app/src/main/res/values
+        mkdir -p app/src/main/res/mipmap-hdpi
+        mkdir -p app/src/main/res/mipmap-mdpi
+        mkdir -p app/src/main/res/mipmap-xhdpi
+        mkdir -p app/src/main/res/mipmap-xxhdpi
+        mkdir -p app/src/main/res/mipmap-xxxhdpi
+        mkdir -p gradle/wrapper
+        
+    - name: Download and set app icon
+      run: |
+        if [ -n "${{ github.event.inputs.logo_url }}" ]; then
+          wget -O app_icon.png "${{ github.event.inputs.logo_url }}" || echo "Logo download failed, using default"
+          if [ -f app_icon.png ]; then
+            convert app_icon.png -resize 48x48 app/src/main/res/mipmap-mdpi/ic_launcher.png 2>/dev/null || cp app_icon.png app/src/main/res/mipmap-mdpi/ic_launcher.png
+            convert app_icon.png -resize 72x72 app/src/main/res/mipmap-hdpi/ic_launcher.png 2>/dev/null || cp app_icon.png app/src/main/res/mipmap-hdpi/ic_launcher.png
+            convert app_icon.png -resize 96x96 app/src/main/res/mipmap-xhdpi/ic_launcher.png 2>/dev/null || cp app_icon.png app/src/main/res/mipmap-xhdpi/ic_launcher.png
+            convert app_icon.png -resize 144x144 app/src/main/res/mipmap-xxhdpi/ic_launcher.png 2>/dev/null || cp app_icon.png app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+            convert app_icon.png -resize 192x192 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png 2>/dev/null || cp app_icon.png app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          fi
+        fi
+        
+    - name: Create MainActivity.kt
+      run: |
+        cat > app/src/main/java/com/webview/app/MainActivity.kt << 'KOTLIN_EOF'
+        package com.webview.app
+
+        import android.annotation.SuppressLint
+        import android.content.Context
+        import android.graphics.Bitmap
+        import android.net.ConnectivityManager
+        import android.net.NetworkCapabilities
+        import android.os.Bundle
+        import android.view.View
+        import android.webkit.*
+        import android.widget.ProgressBar
+        import android.widget.TextView
+        import androidx.appcompat.app.AppCompatActivity
+
+        class MainActivity : AppCompatActivity() {
+            private lateinit var webView: WebView
+            private lateinit var progressBar: ProgressBar
+            private lateinit var offlineText: TextView
+            private lateinit var urlText: TextView
+
+            @SuppressLint("SetJavaScriptEnabled")
+            override fun onCreate(savedInstanceState: Bundle?) {
+                super.onCreate(savedInstanceState)
+                setContentView(R.layout.activity_main)
+
+                webView = findViewById(R.id.webView)
+                progressBar = findViewById(R.id.progressBar)
+                offlineText = findViewById(R.id.offlineText)
+                urlText = findViewById(R.id.urlText)
+
+                val webUrl = resources.getString(R.string.web_url)
+                urlText.text = webUrl
+
+                webView.settings.apply {
+                    javaScriptEnabled = true
+                    domStorageEnabled = true
+                    cacheMode = WebSettings.LOAD_DEFAULT
+                    loadWithOverviewMode = true
+                    useWideViewPort = true
+                    builtInZoomControls = false
+                    setSupportZoom(false)
+                }
+
+                webView.webViewClient = object : WebViewClient() {
+                    override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                        super.onPageStarted(view, url, favicon)
+                        progressBar.visibility = View.VISIBLE
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        progressBar.visibility = View.GONE
+                        checkConnection()
+                    }
+
+                    override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                        super.onReceivedError(view, request, error)
+                        checkConnection()
+                    }
+                }
+
+                webView.webChromeClient = object : WebChromeClient() {
+                    override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                        progressBar.progress = newProgress
+                    }
+                }
+
+                if (isOnline()) {
+                    webView.loadUrl(webUrl)
+                    offlineText.visibility = View.GONE
+                } else {
+                    offlineText.visibility = View.VISIBLE
+                    webView.visibility = View.GONE
+                }
+            }
+
+            private fun isOnline(): Boolean {
+                val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                val network = connectivityManager.activeNetwork ?: return false
+                val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+                return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            }
+
+            private fun checkConnection() {
+                if (!isOnline()) {
+                    offlineText.visibility = View.VISIBLE
+                    webView.visibility = View.GONE
+                } else {
+                    offlineText.visibility = View.GONE
+                    webView.visibility = View.VISIBLE
+                }
+            }
+
+            override fun onBackPressed() {
+                if (webView.canGoBack()) {
+                    webView.goBack()
+                } else {
+                    super.onBackPressed()
+                }
+            }
+        }
+        KOTLIN_EOF
+        
+    - name: Create activity_main.xml
+      run: |
+        cat > app/src/main/res/layout/activity_main.xml << 'XML_EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="#667eea">
+
+            <WebView
+                android:id="@+id/webView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <ProgressBar
+                android:id="@+id/progressBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="4dp"
+                android:layout_alignParentTop="true"
+                android:visibility="gone" />
+
+            <LinearLayout
+                android:id="@+id/offlineText"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:orientation="vertical"
+                android:gravity="center"
+                android:padding="32dp"
+                android:visibility="gone"
+                android:background="@drawable/gradient_background">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="⚠️"
+                    android:textSize="72sp"
+                    android:layout_marginBottom="24dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="YOU ARE OFFLINE"
+                    android:textSize="28sp"
+                    android:textColor="#FFFFFF"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="16dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Please check your internet connection"
+                    android:textSize="16sp"
+                    android:textColor="#E0E0E0"
+                    android:textAlignment="center"
+                    android:layout_marginBottom="32dp" />
+
+                <TextView
+                    android:id="@+id/urlText"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:textSize="14sp"
+                    android:textColor="#CCCCCC"
+                    android:padding="16dp"
+                    android:background="#33000000"
+                    android:layout_marginTop="16dp" />
+            </LinearLayout>
+        </RelativeLayout>
+        XML_EOF
+        
+    - name: Create gradient_background.xml
+      run: |
+        mkdir -p app/src/main/res/drawable
+        cat > app/src/main/res/drawable/gradient_background.xml << 'XML_EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <shape xmlns:android="http://schemas.android.com/apk/res/android">
+            <gradient
+                android:startColor="#667eea"
+                android:endColor="#764ba2"
+                android:angle="135" />
+        </shape>
+        XML_EOF
+        
+    - name: Create strings.xml
+      run: |
+        cat > app/src/main/res/values/strings.xml << EOF
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <string name="app_name">${{ github.event.inputs.app_name }}</string>
+            <string name="web_url">${{ github.event.inputs.web_url }}</string>
+        </resources>
+        EOF
+        
+    - name: Create colors.xml
+      run: |
+        cat > app/src/main/res/values/colors.xml << 'XML_EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <color name="purple_200">#FFBB86FC</color>
+            <color name="purple_500">#FF6200EE</color>
+            <color name="purple_700">#FF3700B3</color>
+            <color name="teal_200">#FF03DAC5</color>
+            <color name="teal_700">#FF018786</color>
+            <color name="black">#FF000000</color>
+            <color name="white">#FFFFFFFF</color>
+        </resources>
+        XML_EOF
+        
+    - name: Create themes.xml
+      run: |
+        mkdir -p app/src/main/res/values-night
+        cat > app/src/main/res/values/themes.xml << 'XML_EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <style name="Theme.WebViewApp" parent="Theme.AppCompat.Light.NoActionBar">
+                <item name="colorPrimary">@color/purple_500</item>
+                <item name="colorPrimaryDark">@color/purple_700</item>
+                <item name="colorAccent">@color/teal_200</item>
+            </style>
+        </resources>
+        XML_EOF
+        
+    - name: Create AndroidManifest.xml
+      run: |
+        mkdir -p app/src/main
+        cat > app/src/main/AndroidManifest.xml << EOF
+        <?xml version="1.0" encoding="utf-8"?>
+        <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+            package="com.webview.app">
+
+            <uses-permission android:name="android.permission.INTERNET" />
+            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+            <application
+                android:allowBackup="true"
+                android:icon="@mipmap/ic_launcher"
+                android:label="@string/app_name"
+                android:roundIcon="@mipmap/ic_launcher"
+                android:supportsRtl="true"
+                android:theme="@style/Theme.WebViewApp"
+                android:usesCleartextTraffic="true">
+                <activity
+                    android:name=".MainActivity"
+                    android:exported="true"
+                    android:configChanges="orientation|screenSize">
+                    <intent-filter>
+                        <action android:name="android.intent.action.MAIN" />
+                        <category android:name="android.intent.category.LAUNCHER" />
+                    </intent-filter>
+                </activity>
+            </application>
+        </manifest>
+        EOF
+        
+    - name: Create build.gradle (app)
+      run: |
+        cat > app/build.gradle << 'GRADLE_EOF'
+        plugins {
+            id 'com.android.application'
+            id 'kotlin-android'
+        }
+
+        android {
+            namespace 'com.webview.app'
+            compileSdk 34
+
+            defaultConfig {
+                applicationId "com.webview.app"
+                minSdk 24
+                targetSdk 34
+                versionCode 1
+                versionName "1.0"
+            }
+
+            buildTypes {
+                release {
+                    minifyEnabled false
+                    proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+                }
+            }
+            
+            compileOptions {
+                sourceCompatibility JavaVersion.VERSION_17
+                targetCompatibility JavaVersion.VERSION_17
+            }
+            
+            kotlinOptions {
+                jvmTarget = '17'
+            }
+        }
+
+        dependencies {
+            implementation 'androidx.core:core-ktx:1.12.0'
+            implementation 'androidx.appcompat:appcompat:1.6.1'
+            implementation 'com.google.android.material:material:1.11.0'
+        }
+        GRADLE_EOF
+        
+    - name: Create build.gradle (root)
+      run: |
+        cat > build.gradle << 'GRADLE_EOF'
+        buildscript {
+            ext.kotlin_version = '1.9.20'
+            repositories {
+                google()
+                mavenCentral()
+            }
+            dependencies {
+                classpath 'com.android.tools.build:gradle:8.2.0'
+                classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+            }
+        }
+
+        allprojects {
+            repositories {
+                google()
+                mavenCentral()
+            }
+        }
+        GRADLE_EOF
+        
+    - name: Create settings.gradle
+      run: |
+        cat > settings.gradle << 'GRADLE_EOF'
+        include ':app'
+        GRADLE_EOF
+        
+    - name: Create gradle.properties
+      run: |
+        cat > gradle.properties << 'PROPS_EOF'
+        org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+        android.useAndroidX=true
+        android.enableJetifier=true
+        kotlin.code.style=official
+        PROPS_EOF
+        
+    - name: Create gradle-wrapper.properties
+      run: |
+        cat > gradle/wrapper/gradle-wrapper.properties << 'WRAPPER_EOF'
+        distributionBase=GRADLE_USER_HOME
+        distributionPath=wrapper/dists
+        distributionUrl=https\://services.gradle.org/distributions/gradle-8.2-bin.zip
+        zipStoreBase=GRADLE_USER_HOME
+        zipStorePath=wrapper/dists
+        WRAPPER_EOF
+        
+    - name: Download Gradle Wrapper
+      run: |
+        wget https://raw.githubusercontent.com/gradle/gradle/master/gradle/wrapper/gradle-wrapper.jar -O gradle/wrapper/gradle-wrapper.jar
+        
+    - name: Create gradlew
+      run: |
+        wget https://raw.githubusercontent.com/gradle/gradle/master/gradlew
+        chmod +x gradlew
+        
+    - name: Build APK
+      run: |
+        ./gradlew assembleDebug --stacktrace
+        
+    - name: Rename APK
+      run: |
+        APP_NAME="${{ github.event.inputs.app_name }}"
+        APP_NAME_CLEAN=$(echo "$APP_NAME" | tr ' ' '_' | tr '[:upper:]' '[:lower:]')
+        cp app/build/outputs/apk/debug/app-debug.apk "${APP_NAME_CLEAN}.apk"
+        
+    - name: Upload APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ github.event.inputs.app_name }}
+        path: "*.apk"
+        
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v1.0.${{ github.run_number }}
+        name: ${{ github.event.inputs.app_name }} v1.0.${{ github.run_number }}
+        body: |
+          **App Name:** ${{ github.event.inputs.app_name }}
+          **Website:** ${{ github.event.inputs.web_url }}
+          **Build:** #${{ github.run_number }}
+        files: "*.apk"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
