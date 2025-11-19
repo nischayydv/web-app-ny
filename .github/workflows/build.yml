@@ -429,15 +429,6 @@ jobs:
         APP_NAME="${{ github.event.inputs.app_name }}"
         APP_NAME_CLEAN=$(echo "$APP_NAME" | tr ' ' '_' | tr '[:upper:]' '[:lower:]')
         cp app/build/outputs/apk/debug/app-debug.apk "${APP_NAME_CLEAN}.apk"
-          - name: Build APK
-      run: |
-        ./gradlew assembleDebug --stacktrace
-        
-    - name: Rename APK
-      run: |
-        APP_NAME="${{ github.event.inputs.app_name }}"
-        APP_NAME_CLEAN=$(echo "$APP_NAME" | tr ' ' '_' | tr '[:upper:]' '[:lower:]')
-        cp app/build/outputs/apk/debug/app-debug.apk "${APP_NAME_CLEAN}.apk"
 
     # ✅ FIXED UPLOAD (V4)
     - name: Upload APK
