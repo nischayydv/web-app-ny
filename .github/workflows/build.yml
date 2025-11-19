@@ -1,21 +1,25 @@
-- name: Upload APK
-  uses: actions/upload-artifact@v4
-  with:
-    name: ${{ github.event.inputs.app_name }}
-    path: "*.apk"
+name: Build Android APK
 
-- name: Create Release
-  uses: softprops/action-gh-release@v2
-  with:
-    tag_name: v1.0.${{ github.run_number }}
-    name: ${{ github.event.inputs.app_name }} v1.0.${{ github.run_number }}
-    body: |
-      **App Name:** ${{ github.event.inputs.app_name }}
-      **Website:** ${{ github.event.inputs.web_url }}
-      **Build:** #${{ github.run_number }}
-    files: "*.apk"
-  env:
-    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+on:
+  workflow_dispatch:
+    inputs:
+      app_name:
+        description: 'App Name'
+        required: true
+        default: 'NY BOTS'
+      web_url:
+        description: 'Website URL'
+        required: true
+        default: 'https://example.com'
+      logo_url:
+        description: 'Logo URL (PNG/JPG)'
+        required: false
+        default: ''
+      package_name:
+        description: 'Package Name (com.example.app)'
+        required: true
+        default: 'com.nybots.app'
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -425,15 +429,26 @@ jobs:
         APP_NAME="${{ github.event.inputs.app_name }}"
         APP_NAME_CLEAN=$(echo "$APP_NAME" | tr ' ' '_' | tr '[:upper:]' '[:lower:]')
         cp app/build/outputs/apk/debug/app-debug.apk "${APP_NAME_CLEAN}.apk"
+          - name: Build APK
+      run: |
+        ./gradlew assembleDebug --stacktrace
         
+    - name: Rename APK
+      run: |
+        APP_NAME="${{ github.event.inputs.app_name }}"
+        APP_NAME_CLEAN=$(echo "$APP_NAME" | tr ' ' '_' | tr '[:upper:]' '[:lower:]')
+        cp app/build/outputs/apk/debug/app-debug.apk "${APP_NAME_CLEAN}.apk"
+
+    # ✅ FIXED UPLOAD (V4)
     - name: Upload APK
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.event.inputs.app_name }}
         path: "*.apk"
-        
+
+    # ✅ FIXED RELEASE (V2)
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v2
       with:
         tag_name: v1.0.${{ github.run_number }}
         name: ${{ github.event.inputs.app_name }} v1.0.${{ github.run_number }}
@@ -444,3 +459,4 @@ jobs:
         files: "*.apk"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
