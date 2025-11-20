@@ -23,6 +23,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
     steps:
     - name: Checkout code
@@ -103,6 +105,9 @@ jobs:
                     useWideViewPort = true
                     builtInZoomControls = false
                     setSupportZoom(false)
+                    mediaPlaybackRequiresUserGesture = false
+                    allowFileAccess = true
+                    allowContentAccess = true
                 }
 
                 webView.webViewClient = object : WebViewClient() {
@@ -120,6 +125,10 @@ jobs:
                     override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                         super.onReceivedError(view, request, error)
                         checkConnection()
+                    }
+
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                        return false
                     }
                 }
 
@@ -155,6 +164,7 @@ jobs:
                 }
             }
 
+            @Deprecated("Deprecated in Java")
             override fun onBackPressed() {
                 if (webView.canGoBack()) {
                     webView.goBack()
@@ -297,6 +307,7 @@ jobs:
 
             <uses-permission android:name="android.permission.INTERNET" />
             <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+            <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
             <application
                 android:allowBackup="true"
@@ -305,11 +316,13 @@ jobs:
                 android:roundIcon="@mipmap/ic_launcher"
                 android:supportsRtl="true"
                 android:theme="@style/Theme.WebViewApp"
-                android:usesCleartextTraffic="true">
+                android:usesCleartextTraffic="true"
+                android:hardwareAccelerated="true">
                 <activity
                     android:name=".MainActivity"
                     android:exported="true"
-                    android:configChanges="orientation|screenSize">
+                    android:launchMode="singleTask"
+                    android:configChanges="orientation|screenSize|keyboardHidden">
                     <intent-filter>
                         <action android:name="android.intent.action.MAIN" />
                         <category android:name="android.intent.category.LAUNCHER" />
@@ -429,25 +442,37 @@ jobs:
         APP_NAME="${{ github.event.inputs.app_name }}"
         APP_NAME_CLEAN=$(echo "$APP_NAME" | tr ' ' '_' | tr '[:upper:]' '[:lower:]')
         cp app/build/outputs/apk/debug/app-debug.apk "${APP_NAME_CLEAN}.apk"
+        echo "APK_FILENAME=${APP_NAME_CLEAN}.apk" >> $GITHUB_ENV
 
-    # ✅ FIXED UPLOAD (V4)
     - name: Upload APK
       uses: actions/upload-artifact@v4
       with:
-        name: ${{ github.event.inputs.app_name }}
+        name: android-apk
         path: "*.apk"
 
-    # ✅ FIXED RELEASE (V2)
     - name: Create Release
       uses: softprops/action-gh-release@v2
       with:
         tag_name: v1.0.${{ github.run_number }}
         name: ${{ github.event.inputs.app_name }} v1.0.${{ github.run_number }}
         body: |
-          **App Name:** ${{ github.event.inputs.app_name }}
+          ## 📱 ${{ github.event.inputs.app_name }}
+          
           **Website:** ${{ github.event.inputs.web_url }}
-          **Build:** #${{ github.run_number }}
+          **Build Number:** #${{ github.run_number }}
+          **Package:** com.webview.app
+          
+          ### 📥 Installation
+          1. Download the APK file below
+          2. Enable "Install from Unknown Sources" in Android settings
+          3. Install the APK
+          4. Open the app and enjoy!
+          
+          ### ✨ Features
+          - Native Android WebView
+          - Offline detection
+          - Custom branding
+          - Progress indicator
         files: "*.apk"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
