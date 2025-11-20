@@ -41,11 +41,13 @@ jobs:
         mkdir -p app/src/main/java/com/webview/app
         mkdir -p app/src/main/res/layout
         mkdir -p app/src/main/res/values
+        mkdir -p app/src/main/res/drawable
         mkdir -p app/src/main/res/mipmap-hdpi
         mkdir -p app/src/main/res/mipmap-mdpi
         mkdir -p app/src/main/res/mipmap-xhdpi
         mkdir -p app/src/main/res/mipmap-xxhdpi
         mkdir -p app/src/main/res/mipmap-xxxhdpi
+        mkdir -p app/src/main/res/anim
         mkdir -p gradle/wrapper
         
     - name: Download and set app icon
@@ -61,6 +63,45 @@ jobs:
           fi
         fi
         
+    - name: Create SplashActivity.kt
+      run: |
+        cat > app/src/main/java/com/webview/app/SplashActivity.kt << 'KOTLIN_EOF'
+        package com.webview.app
+
+        import android.content.Intent
+        import android.os.Bundle
+        import android.os.Handler
+        import android.os.Looper
+        import android.view.animation.AnimationUtils
+        import android.widget.TextView
+        import androidx.appcompat.app.AppCompatActivity
+
+        class SplashActivity : AppCompatActivity() {
+            override fun onCreate(savedInstanceState: Bundle?) {
+                super.onCreate(savedInstanceState)
+                setContentView(R.layout.activity_splash)
+
+                val appName = findViewById<TextView>(R.id.appName)
+                val tagline = findViewById<TextView>(R.id.tagline)
+
+                val fadeIn = AnimationUtils.loadAnimation(this, R.anim.fade_in)
+                val slideUp = AnimationUtils.loadAnimation(this, R.anim.slide_up)
+
+                appName.startAnimation(fadeIn)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    tagline.startAnimation(slideUp)
+                }, 500)
+
+                Handler(Looper.getMainLooper()).postDelayed({
+                    val intent = Intent(this, MainActivity::class.java)
+                    startActivity(intent)
+                    overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
+                    finish()
+                }, 3000)
+            }
+        }
+        KOTLIN_EOF
+        
     - name: Create MainActivity.kt
       run: |
         cat > app/src/main/java/com/webview/app/MainActivity.kt << 'KOTLIN_EOF'
@@ -72,17 +113,24 @@ jobs:
         import android.net.ConnectivityManager
         import android.net.NetworkCapabilities
         import android.os.Bundle
+        import android.os.Handler
+        import android.os.Looper
         import android.view.View
         import android.webkit.*
         import android.widget.ProgressBar
         import android.widget.TextView
+        import android.widget.Button
         import androidx.appcompat.app.AppCompatActivity
+        import com.google.android.material.snackbar.Snackbar
 
         class MainActivity : AppCompatActivity() {
             private lateinit var webView: WebView
             private lateinit var progressBar: ProgressBar
-            private lateinit var offlineText: TextView
+            private lateinit var offlineLayout: View
             private lateinit var urlText: TextView
+            private lateinit var retryButton: Button
+            private val handler = Handler(Looper.getMainLooper())
+            private var isCheckingConnection = false
 
             @SuppressLint("SetJavaScriptEnabled")
             override fun onCreate(savedInstanceState: Bundle?) {
@@ -91,23 +139,48 @@ jobs:
 
                 webView = findViewById(R.id.webView)
                 progressBar = findViewById(R.id.progressBar)
-                offlineText = findViewById(R.id.offlineText)
+                offlineLayout = findViewById(R.id.offlineLayout)
                 urlText = findViewById(R.id.urlText)
+                retryButton = findViewById(R.id.retryButton)
 
                 val webUrl = resources.getString(R.string.web_url)
                 urlText.text = webUrl
 
+                setupWebView()
+                
+                retryButton.setOnClickListener {
+                    if (isOnline()) {
+                        loadWebsite()
+                    } else {
+                        Snackbar.make(it, "Still offline. Please check your connection.", Snackbar.LENGTH_SHORT).show()
+                    }
+                }
+
+                if (isOnline()) {
+                    loadWebsite()
+                } else {
+                    showOfflineScreen()
+                }
+
+                startConnectionMonitoring()
+            }
+
+            @SuppressLint("SetJavaScriptEnabled")
+            private fun setupWebView() {
                 webView.settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
+                    databaseEnabled = true
                     cacheMode = WebSettings.LOAD_DEFAULT
                     loadWithOverviewMode = true
                     useWideViewPort = true
                     builtInZoomControls = false
-                    setSupportZoom(false)
+                    setSupportZoom(true)
                     mediaPlaybackRequiresUserGesture = false
                     allowFileAccess = true
                     allowContentAccess = true
+                    javaScriptCanOpenWindowsAutomatically = true
+                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 }
 
                 webView.webViewClient = object : WebViewClient() {
@@ -119,12 +192,13 @@ jobs:
                     override fun onPageFinished(view: WebView?, url: String?) {
                         super.onPageFinished(view, url)
                         progressBar.visibility = View.GONE
-                        checkConnection()
                     }
 
                     override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
                         super.onReceivedError(view, request, error)
-                        checkConnection()
+                        if (request?.isForMainFrame == true) {
+                            showOfflineScreen()
+                        }
                     }
 
                     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -137,43 +211,123 @@ jobs:
                         progressBar.progress = newProgress
                     }
                 }
+            }
 
-                if (isOnline()) {
-                    webView.loadUrl(webUrl)
-                    offlineText.visibility = View.GONE
-                } else {
-                    offlineText.visibility = View.VISIBLE
-                    webView.visibility = View.GONE
-                }
+            private fun loadWebsite() {
+                val webUrl = resources.getString(R.string.web_url)
+                offlineLayout.visibility = View.GONE
+                webView.visibility = View.VISIBLE
+                webView.loadUrl(webUrl)
+            }
+
+            private fun showOfflineScreen() {
+                offlineLayout.visibility = View.VISIBLE
+                webView.visibility = View.GONE
             }
 
             private fun isOnline(): Boolean {
                 val connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
                 val network = connectivityManager.activeNetwork ?: return false
                 val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
-                return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                       capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
             }
 
-            private fun checkConnection() {
-                if (!isOnline()) {
-                    offlineText.visibility = View.VISIBLE
-                    webView.visibility = View.GONE
-                } else {
-                    offlineText.visibility = View.GONE
-                    webView.visibility = View.VISIBLE
+            private fun startConnectionMonitoring() {
+                val checkConnection = object : Runnable {
+                    override fun run() {
+                        if (!isCheckingConnection) {
+                            isCheckingConnection = true
+                            if (isOnline() && offlineLayout.visibility == View.VISIBLE) {
+                                loadWebsite()
+                            } else if (!isOnline() && webView.visibility == View.VISIBLE) {
+                                showOfflineScreen()
+                            }
+                            isCheckingConnection = false
+                        }
+                        handler.postDelayed(this, 5000)
+                    }
                 }
+                handler.post(checkConnection)
             }
 
             @Deprecated("Deprecated in Java")
             override fun onBackPressed() {
-                if (webView.canGoBack()) {
+                if (webView.canGoBack() && webView.visibility == View.VISIBLE) {
                     webView.goBack()
                 } else {
                     super.onBackPressed()
                 }
             }
+
+            override fun onDestroy() {
+                super.onDestroy()
+                handler.removeCallbacksAndMessages(null)
+            }
         }
         KOTLIN_EOF
+        
+    - name: Create activity_splash.xml
+      run: |
+        cat > app/src/main/res/layout/activity_splash.xml << 'XML_EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:background="@drawable/gradient_background">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_centerInParent="true"
+                android:orientation="vertical"
+                android:gravity="center">
+
+                <TextView
+                    android:id="@+id/appName"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/app_name"
+                    android:textSize="56sp"
+                    android:textColor="@android:color/white"
+                    android:textStyle="bold"
+                    android:letterSpacing="0.1"
+                    android:shadowColor="#80000000"
+                    android:shadowDx="0"
+                    android:shadowDy="4"
+                    android:shadowRadius="8"
+                    android:alpha="0" />
+
+                <TextView
+                    android:id="@+id/tagline"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Next Generation Automation"
+                    android:textSize="18sp"
+                    android:textColor="#E0FFFFFF"
+                    android:layout_marginTop="16dp"
+                    android:alpha="0" />
+
+                <ProgressBar
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginTop="48dp"
+                    android:indeterminateTint="@android:color/white" />
+
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Powered by NY BOTS"
+                android:textSize="12sp"
+                android:textColor="#80FFFFFF"
+                android:layout_alignParentBottom="true"
+                android:layout_centerHorizontal="true"
+                android:layout_marginBottom="32dp" />
+
+        </RelativeLayout>
+        XML_EOF
         
     - name: Create activity_main.xml
       run: |
@@ -182,7 +336,7 @@ jobs:
         <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="#667eea">
+            android:background="@android:color/white">
 
             <WebView
                 android:id="@+id/webView"
@@ -193,12 +347,13 @@ jobs:
                 android:id="@+id/progressBar"
                 style="?android:attr/progressBarStyleHorizontal"
                 android:layout_width="match_parent"
-                android:layout_height="4dp"
+                android:layout_height="3dp"
                 android:layout_alignParentTop="true"
+                android:progressTint="#667eea"
                 android:visibility="gone" />
 
             <LinearLayout
-                android:id="@+id/offlineText"
+                android:id="@+id/offlineLayout"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:orientation="vertical"
@@ -207,54 +362,132 @@ jobs:
                 android:visibility="gone"
                 android:background="@drawable/gradient_background">
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="⚠️"
-                    android:textSize="72sp"
-                    android:layout_marginBottom="24dp" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="YOU ARE OFFLINE"
-                    android:textSize="28sp"
-                    android:textColor="#FFFFFF"
-                    android:textStyle="bold"
-                    android:layout_marginBottom="16dp" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Please check your internet connection"
-                    android:textSize="16sp"
-                    android:textColor="#E0E0E0"
-                    android:textAlignment="center"
+                <View
+                    android:layout_width="120dp"
+                    android:layout_height="120dp"
+                    android:background="@drawable/offline_icon_bg"
                     android:layout_marginBottom="32dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="No Internet Connection"
+                    android:textSize="24sp"
+                    android:textColor="@android:color/white"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="12dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Please check your internet connection and try again"
+                    android:textSize="16sp"
+                    android:textColor="#E0FFFFFF"
+                    android:textAlignment="center"
+                    android:layout_marginBottom="32dp"
+                    android:lineSpacingExtra="4dp" />
+
+                <Button
+                    android:id="@+id/retryButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Retry Connection"
+                    android:textColor="@android:color/white"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:paddingLeft="32dp"
+                    android:paddingRight="32dp"
+                    android:paddingTop="16dp"
+                    android:paddingBottom="16dp"
+                    android:background="@drawable/button_background"
+                    android:layout_marginBottom="24dp" />
 
                 <TextView
                     android:id="@+id/urlText"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:textSize="14sp"
-                    android:textColor="#CCCCCC"
+                    android:textSize="13sp"
+                    android:textColor="#B0FFFFFF"
                     android:padding="16dp"
-                    android:background="#33000000"
-                    android:layout_marginTop="16dp" />
+                    android:background="@drawable/url_background"
+                    android:layout_marginTop="16dp"
+                    android:maxLines="2"
+                    android:ellipsize="middle" />
+
             </LinearLayout>
         </RelativeLayout>
         XML_EOF
         
-    - name: Create gradient_background.xml
+    - name: Create animations
       run: |
-        mkdir -p app/src/main/res/drawable
+        cat > app/src/main/res/anim/fade_in.xml << 'XML_EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <set xmlns:android="http://schemas.android.com/apk/res/android">
+            <alpha
+                android:duration="1000"
+                android:fromAlpha="0.0"
+                android:toAlpha="1.0" />
+            <scale
+                android:duration="1000"
+                android:fromXScale="0.8"
+                android:fromYScale="0.8"
+                android:toXScale="1.0"
+                android:toYScale="1.0"
+                android:pivotX="50%"
+                android:pivotY="50%" />
+        </set>
+        XML_EOF
+        
+        cat > app/src/main/res/anim/slide_up.xml << 'XML_EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <set xmlns:android="http://schemas.android.com/apk/res/android">
+            <alpha
+                android:duration="800"
+                android:fromAlpha="0.0"
+                android:toAlpha="1.0" />
+            <translate
+                android:duration="800"
+                android:fromYDelta="50%"
+                android:toYDelta="0%" />
+        </set>
+        XML_EOF
+        
+    - name: Create drawable resources
+      run: |
         cat > app/src/main/res/drawable/gradient_background.xml << 'XML_EOF'
         <?xml version="1.0" encoding="utf-8"?>
         <shape xmlns:android="http://schemas.android.com/apk/res/android">
             <gradient
                 android:startColor="#667eea"
-                android:endColor="#764ba2"
-                android:angle="135" />
+                android:centerColor="#764ba2"
+                android:endColor="#5b4a9e"
+                android:angle="135"
+                android:type="linear" />
+        </shape>
+        XML_EOF
+        
+        cat > app/src/main/res/drawable/button_background.xml << 'XML_EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <shape xmlns:android="http://schemas.android.com/apk/res/android">
+            <solid android:color="#FFFFFF" />
+            <corners android:radius="50dp" />
+        </shape>
+        XML_EOF
+        
+        cat > app/src/main/res/drawable/url_background.xml << 'XML_EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <shape xmlns:android="http://schemas.android.com/apk/res/android">
+            <solid android:color="#40FFFFFF" />
+            <corners android:radius="12dp" />
+            <stroke android:width="1dp" android:color="#60FFFFFF" />
+        </shape>
+        XML_EOF
+        
+        cat > app/src/main/res/drawable/offline_icon_bg.xml << 'XML_EOF'
+        <?xml version="1.0" encoding="utf-8"?>
+        <shape xmlns:android="http://schemas.android.com/apk/res/android">
+            <solid android:color="#40FFFFFF" />
+            <corners android:radius="60dp" />
         </shape>
         XML_EOF
         
@@ -274,8 +507,8 @@ jobs:
         <?xml version="1.0" encoding="utf-8"?>
         <resources>
             <color name="purple_200">#FFBB86FC</color>
-            <color name="purple_500">#FF6200EE</color>
-            <color name="purple_700">#FF3700B3</color>
+            <color name="purple_500">#667eea</color>
+            <color name="purple_700">#764ba2</color>
             <color name="teal_200">#FF03DAC5</color>
             <color name="teal_700">#FF018786</color>
             <color name="black">#FF000000</color>
@@ -293,6 +526,14 @@ jobs:
                 <item name="colorPrimary">@color/purple_500</item>
                 <item name="colorPrimaryDark">@color/purple_700</item>
                 <item name="colorAccent">@color/teal_200</item>
+                <item name="android:windowTranslucentStatus">true</item>
+                <item name="android:windowTranslucentNavigation">false</item>
+            </style>
+            
+            <style name="Theme.Splash" parent="Theme.AppCompat.Light.NoActionBar">
+                <item name="android:windowBackground">@drawable/gradient_background</item>
+                <item name="android:windowTranslucentStatus">true</item>
+                <item name="android:windowTranslucentNavigation">false</item>
             </style>
         </resources>
         XML_EOF
@@ -303,6 +544,7 @@ jobs:
         cat > app/src/main/AndroidManifest.xml << EOF
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+            xmlns:tools="http://schemas.android.com/tools"
             package="com.webview.app">
 
             <uses-permission android:name="android.permission.INTERNET" />
@@ -317,17 +559,25 @@ jobs:
                 android:supportsRtl="true"
                 android:theme="@style/Theme.WebViewApp"
                 android:usesCleartextTraffic="true"
-                android:hardwareAccelerated="true">
+                android:hardwareAccelerated="true"
+                tools:targetApi="m">
+                
                 <activity
-                    android:name=".MainActivity"
+                    android:name=".SplashActivity"
                     android:exported="true"
-                    android:launchMode="singleTask"
-                    android:configChanges="orientation|screenSize|keyboardHidden">
+                    android:theme="@style/Theme.Splash"
+                    android:screenOrientation="portrait">
                     <intent-filter>
                         <action android:name="android.intent.action.MAIN" />
                         <category android:name="android.intent.category.LAUNCHER" />
                     </intent-filter>
                 </activity>
+                
+                <activity
+                    android:name=".MainActivity"
+                    android:exported="false"
+                    android:launchMode="singleTask"
+                    android:configChanges="orientation|screenSize|keyboardHidden" />
             </application>
         </manifest>
         EOF
@@ -373,6 +623,7 @@ jobs:
             implementation 'androidx.core:core-ktx:1.12.0'
             implementation 'androidx.appcompat:appcompat:1.6.1'
             implementation 'com.google.android.material:material:1.11.0'
+            implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
         }
         GRADLE_EOF
         
@@ -412,6 +663,7 @@ jobs:
         android.useAndroidX=true
         android.enableJetifier=true
         kotlin.code.style=official
+        android.suppressUnsupportedCompileSdk=34
         PROPS_EOF
         
     - name: Create gradle-wrapper.properties
@@ -442,7 +694,6 @@ jobs:
         APP_NAME="${{ github.event.inputs.app_name }}"
         APP_NAME_CLEAN=$(echo "$APP_NAME" | tr ' ' '_' | tr '[:upper:]' '[:lower:]')
         cp app/build/outputs/apk/debug/app-debug.apk "${APP_NAME_CLEAN}.apk"
-        echo "APK_FILENAME=${APP_NAME_CLEAN}.apk" >> $GITHUB_ENV
 
     - name: Upload APK
       uses: actions/upload-artifact@v4
@@ -456,23 +707,24 @@ jobs:
         tag_name: v1.0.${{ github.run_number }}
         name: ${{ github.event.inputs.app_name }} v1.0.${{ github.run_number }}
         body: |
-          ## 📱 ${{ github.event.inputs.app_name }}
+          ## 🚀 ${{ github.event.inputs.app_name }}
           
           **Website:** ${{ github.event.inputs.web_url }}
           **Build Number:** #${{ github.run_number }}
           **Package:** com.webview.app
           
+          ### ✨ Features
+          - 🎨 Professional splash screen with NY BOTS animation
+          - 🌐 Native Android WebView
+          - 📡 Smart offline detection with auto-retry
+          - 🎯 Beautiful gradient UI design
+          - 📊 Progress indicator
+          - ↩️ Smart back button navigation
+          
           ### 📥 Installation
           1. Download the APK file below
           2. Enable "Install from Unknown Sources" in Android settings
-          3. Install the APK
-          4. Open the app and enjoy!
-          
-          ### ✨ Features
-          - Native Android WebView
-          - Offline detection
-          - Custom branding
-          - Progress indicator
+          3. Install and enjoy!
         files: "*.apk"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
