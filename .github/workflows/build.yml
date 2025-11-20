@@ -13,8 +13,8 @@ on:
         default: 'https://example.com'
       logo_url:
         description: 'Logo URL (PNG/JPG)'
-        required: false
-        default: ''
+        required: true
+        default: 'https://i.imgur.com/your-logo.png'
       package_name:
         description: 'Package Name (com.example.app)'
         required: true
@@ -53,14 +53,20 @@ jobs:
     - name: Download and set app icon
       run: |
         if [ -n "${{ github.event.inputs.logo_url }}" ]; then
-          wget -O app_icon.png "${{ github.event.inputs.logo_url }}" || echo "Logo download failed, using default"
+          wget -O app_icon.png "${{ github.event.inputs.logo_url }}" || echo "Logo download failed"
           if [ -f app_icon.png ]; then
+            # App launcher icons
             convert app_icon.png -resize 48x48 app/src/main/res/mipmap-mdpi/ic_launcher.png 2>/dev/null || cp app_icon.png app/src/main/res/mipmap-mdpi/ic_launcher.png
             convert app_icon.png -resize 72x72 app/src/main/res/mipmap-hdpi/ic_launcher.png 2>/dev/null || cp app_icon.png app/src/main/res/mipmap-hdpi/ic_launcher.png
             convert app_icon.png -resize 96x96 app/src/main/res/mipmap-xhdpi/ic_launcher.png 2>/dev/null || cp app_icon.png app/src/main/res/mipmap-xhdpi/ic_launcher.png
             convert app_icon.png -resize 144x144 app/src/main/res/mipmap-xxhdpi/ic_launcher.png 2>/dev/null || cp app_icon.png app/src/main/res/mipmap-xxhdpi/ic_launcher.png
             convert app_icon.png -resize 192x192 app/src/main/res/mipmap-xxxhdpi/ic_launcher.png 2>/dev/null || cp app_icon.png app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+            
+            # Drawable logo for use in layouts (120x120)
+            convert app_icon.png -resize 120x120 app/src/main/res/drawable/app_logo.png 2>/dev/null || cp app_icon.png app/src/main/res/drawable/app_logo.png
           fi
+        else
+          echo "No logo URL provided, using default placeholder"
         fi
         
     - name: Create SplashActivity.kt
@@ -73,6 +79,7 @@ jobs:
         import android.os.Handler
         import android.os.Looper
         import android.view.animation.AnimationUtils
+        import android.widget.ImageView
         import android.widget.TextView
         import androidx.appcompat.app.AppCompatActivity
 
@@ -81,16 +88,20 @@ jobs:
                 super.onCreate(savedInstanceState)
                 setContentView(R.layout.activity_splash)
 
+                val appLogo = findViewById<ImageView>(R.id.appLogo)
                 val appName = findViewById<TextView>(R.id.appName)
                 val tagline = findViewById<TextView>(R.id.tagline)
 
                 val fadeIn = AnimationUtils.loadAnimation(this, R.anim.fade_in)
                 val slideUp = AnimationUtils.loadAnimation(this, R.anim.slide_up)
 
-                appName.startAnimation(fadeIn)
+                appLogo.startAnimation(fadeIn)
+                Handler(Looper.getMainLooper()).postDelayed({
+                    appName.startAnimation(slideUp)
+                }, 300)
                 Handler(Looper.getMainLooper()).postDelayed({
                     tagline.startAnimation(slideUp)
-                }, 500)
+                }, 600)
 
                 Handler(Looper.getMainLooper()).postDelayed({
                     val intent = Intent(this, MainActivity::class.java)
@@ -109,6 +120,8 @@ jobs:
 
         import android.annotation.SuppressLint
         import android.content.Context
+        import android.content.pm.ActivityInfo
+        import android.content.res.Configuration
         import android.graphics.Bitmap
         import android.net.ConnectivityManager
         import android.net.NetworkCapabilities
@@ -118,7 +131,6 @@ jobs:
         import android.view.View
         import android.webkit.*
         import android.widget.ProgressBar
-        import android.widget.TextView
         import android.widget.Button
         import androidx.appcompat.app.AppCompatActivity
         import com.google.android.material.snackbar.Snackbar
@@ -127,10 +139,10 @@ jobs:
             private lateinit var webView: WebView
             private lateinit var progressBar: ProgressBar
             private lateinit var offlineLayout: View
-            private lateinit var urlText: TextView
             private lateinit var retryButton: Button
             private val handler = Handler(Looper.getMainLooper())
             private var isCheckingConnection = false
+            private var isFullscreen = false
 
             @SuppressLint("SetJavaScriptEnabled")
             override fun onCreate(savedInstanceState: Bundle?) {
@@ -140,11 +152,7 @@ jobs:
                 webView = findViewById(R.id.webView)
                 progressBar = findViewById(R.id.progressBar)
                 offlineLayout = findViewById(R.id.offlineLayout)
-                urlText = findViewById(R.id.urlText)
                 retryButton = findViewById(R.id.retryButton)
-
-                val webUrl = resources.getString(R.string.web_url)
-                urlText.text = webUrl
 
                 setupWebView()
                 
@@ -210,6 +218,18 @@ jobs:
                     override fun onProgressChanged(view: WebView?, newProgress: Int) {
                         progressBar.progress = newProgress
                     }
+
+                    override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                        super.onShowCustomView(view, callback)
+                        isFullscreen = true
+                        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+                    }
+
+                    override fun onHideCustomView() {
+                        super.onHideCustomView()
+                        isFullscreen = false
+                        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                    }
                 }
             }
 
@@ -260,9 +280,14 @@ jobs:
                 }
             }
 
+            override fun onConfigurationChanged(newConfig: Configuration) {
+                super.onConfigurationChanged(newConfig)
+            }
+
             override fun onDestroy() {
                 super.onDestroy()
                 handler.removeCallbacksAndMessages(null)
+                webView.destroy()
             }
         }
         KOTLIN_EOF
@@ -283,12 +308,21 @@ jobs:
                 android:orientation="vertical"
                 android:gravity="center">
 
+                <ImageView
+                    android:id="@+id/appLogo"
+                    android:layout_width="120dp"
+                    android:layout_height="120dp"
+                    android:src="@drawable/app_logo"
+                    android:contentDescription="App Logo"
+                    android:scaleType="fitCenter"
+                    android:alpha="0" />
+
                 <TextView
                     android:id="@+id/appName"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="@string/app_name"
-                    android:textSize="56sp"
+                    android:textSize="48sp"
                     android:textColor="@android:color/white"
                     android:textStyle="bold"
                     android:letterSpacing="0.1"
@@ -296,6 +330,7 @@ jobs:
                     android:shadowDx="0"
                     android:shadowDy="4"
                     android:shadowRadius="8"
+                    android:layout_marginTop="24dp"
                     android:alpha="0" />
 
                 <TextView
@@ -303,14 +338,14 @@ jobs:
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Next Generation Automation"
-                    android:textSize="18sp"
+                    android:textSize="16sp"
                     android:textColor="#E0FFFFFF"
-                    android:layout_marginTop="16dp"
+                    android:layout_marginTop="12dp"
                     android:alpha="0" />
 
                 <ProgressBar
-                    android:layout_width="48dp"
-                    android:layout_height="48dp"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
                     android:layout_marginTop="48dp"
                     android:indeterminateTint="@android:color/white" />
 
@@ -358,21 +393,39 @@ jobs:
                 android:layout_height="match_parent"
                 android:orientation="vertical"
                 android:gravity="center"
-                android:padding="32dp"
+                android:padding="40dp"
                 android:visibility="gone"
                 android:background="@drawable/gradient_background">
 
-                <View
-                    android:layout_width="120dp"
-                    android:layout_height="120dp"
-                    android:background="@drawable/offline_icon_bg"
+                <ImageView
+                    android:layout_width="140dp"
+                    android:layout_height="140dp"
+                    android:src="@drawable/app_logo"
+                    android:contentDescription="App Logo"
+                    android:scaleType="fitCenter"
                     android:layout_marginBottom="32dp" />
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:text="@string/app_name"
+                    android:textSize="32sp"
+                    android:textColor="@android:color/white"
+                    android:textStyle="bold"
+                    android:layout_marginBottom="24dp" />
+
+                <View
+                    android:layout_width="60dp"
+                    android:layout_height="4dp"
+                    android:background="@android:color/white"
+                    android:alpha="0.5"
+                    android:layout_marginBottom="24dp" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
                     android:text="No Internet Connection"
-                    android:textSize="24sp"
+                    android:textSize="22sp"
                     android:textColor="@android:color/white"
                     android:textStyle="bold"
                     android:layout_marginBottom="12dp" />
@@ -380,11 +433,11 @@ jobs:
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Please check your internet connection and try again"
-                    android:textSize="16sp"
+                    android:text="Please check your internet connection\nand try again"
+                    android:textSize="15sp"
                     android:textColor="#E0FFFFFF"
                     android:textAlignment="center"
-                    android:layout_marginBottom="32dp"
+                    android:layout_marginBottom="40dp"
                     android:lineSpacingExtra="4dp" />
 
                 <Button
@@ -392,27 +445,15 @@ jobs:
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="Retry Connection"
-                    android:textColor="@android:color/white"
+                    android:textColor="#667eea"
                     android:textSize="16sp"
                     android:textStyle="bold"
-                    android:paddingLeft="32dp"
-                    android:paddingRight="32dp"
+                    android:paddingLeft="40dp"
+                    android:paddingRight="40dp"
                     android:paddingTop="16dp"
                     android:paddingBottom="16dp"
                     android:background="@drawable/button_background"
-                    android:layout_marginBottom="24dp" />
-
-                <TextView
-                    android:id="@+id/urlText"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:textSize="13sp"
-                    android:textColor="#B0FFFFFF"
-                    android:padding="16dp"
-                    android:background="@drawable/url_background"
-                    android:layout_marginTop="16dp"
-                    android:maxLines="2"
-                    android:ellipsize="middle" />
+                    android:elevation="4dp" />
 
             </LinearLayout>
         </RelativeLayout>
@@ -424,13 +465,13 @@ jobs:
         <?xml version="1.0" encoding="utf-8"?>
         <set xmlns:android="http://schemas.android.com/apk/res/android">
             <alpha
-                android:duration="1000"
+                android:duration="1200"
                 android:fromAlpha="0.0"
                 android:toAlpha="1.0" />
             <scale
-                android:duration="1000"
-                android:fromXScale="0.8"
-                android:fromYScale="0.8"
+                android:duration="1200"
+                android:fromXScale="0.7"
+                android:fromYScale="0.7"
                 android:toXScale="1.0"
                 android:toYScale="1.0"
                 android:pivotX="50%"
@@ -447,7 +488,7 @@ jobs:
                 android:toAlpha="1.0" />
             <translate
                 android:duration="800"
-                android:fromYDelta="50%"
+                android:fromYDelta="30%"
                 android:toYDelta="0%" />
         </set>
         XML_EOF
@@ -474,22 +515,25 @@ jobs:
         </shape>
         XML_EOF
         
-        cat > app/src/main/res/drawable/url_background.xml << 'XML_EOF'
+    - name: Create default logo if not provided
+      run: |
+        if [ ! -f app/src/main/res/drawable/app_logo.png ]; then
+          cat > app/src/main/res/drawable/app_logo.xml << 'XML_EOF'
         <?xml version="1.0" encoding="utf-8"?>
-        <shape xmlns:android="http://schemas.android.com/apk/res/android">
-            <solid android:color="#40FFFFFF" />
-            <corners android:radius="12dp" />
-            <stroke android:width="1dp" android:color="#60FFFFFF" />
-        </shape>
+        <vector xmlns:android="http://schemas.android.com/apk/res/android"
+            android:width="120dp"
+            android:height="120dp"
+            android:viewportWidth="120"
+            android:viewportHeight="120">
+            <path
+                android:fillColor="#FFFFFF"
+                android:pathData="M60,10C32.4,10 10,32.4 10,60C10,87.6 32.4,110 60,110C87.6,110 110,87.6 110,60C110,32.4 87.6,10 60,10ZM60,100C37.9,100 20,82.1 20,60C20,37.9 37.9,20 60,20C82.1,20 100,37.9 100,60C100,82.1 82.1,100 60,100Z"/>
+            <path
+                android:fillColor="#FFFFFF"
+                android:pathData="M45,40L45,80L55,80L55,60L75,80L85,80L85,40L75,40L75,60L55,40Z"/>
+        </vector>
         XML_EOF
-        
-        cat > app/src/main/res/drawable/offline_icon_bg.xml << 'XML_EOF'
-        <?xml version="1.0" encoding="utf-8"?>
-        <shape xmlns:android="http://schemas.android.com/apk/res/android">
-            <solid android:color="#40FFFFFF" />
-            <corners android:radius="60dp" />
-        </shape>
-        XML_EOF
+        fi
         
     - name: Create strings.xml
       run: |
@@ -566,7 +610,8 @@ jobs:
                     android:name=".SplashActivity"
                     android:exported="true"
                     android:theme="@style/Theme.Splash"
-                    android:screenOrientation="portrait">
+                    android:screenOrientation="portrait"
+                    android:configChanges="orientation|screenSize">
                     <intent-filter>
                         <action android:name="android.intent.action.MAIN" />
                         <category android:name="android.intent.category.LAUNCHER" />
